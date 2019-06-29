@@ -1,0 +1,8 @@
+bin
+pkg
+certs
+cloud-init
+.idea
+*.deb
+vendor
+*.pem
