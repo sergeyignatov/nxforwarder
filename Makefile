@@ -2,7 +2,7 @@ NAME:=nxforwarder
 COMMIT := $(shell git log -1 --format=%ct)
 DESCRIPTION:="NXDOMAIN forwarder"
 MAINTAINER:="Sergey Ignatov <sergey.a.ignatov@gmail.com>"
-VERSION ?= 0
+VERSION:=$(shell sh -c 'git describe --always --tags | sed -e "s/^v//i"')
 
 
 
@@ -24,7 +24,10 @@ deb: bin/$(NAME)
 		-m $(MAINTAINER) \
 		--license "MIT" \
 		-a x86_64 \
-		misc/nxforwarder.service=/lib/systemd/system/nxforwarder.service
+		--config-files /etc/default/$(NAME) \
+		--config-files /lib/systemd/system/$(NAME).service \
+		misc/$(NAME).default=/etc/default/$(NAME) \
+		misc/$(NAME).service=/lib/systemd/system/$(NAME).service
 
 dep:
 ifeq ($(shell command -v dep 2> /dev/null),)

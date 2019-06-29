@@ -1,0 +1,13 @@
+[Unit]
+Description=NXDOMAIN forwarder
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/nxforwarder
+ExecStart=/usr/bin/nxforwarder
+Restart=on-failure
+SyslogIdentifier=nxforwarder
+
+[Install]
+WantedBy=multi-user.target
