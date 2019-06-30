@@ -133,7 +133,13 @@ func main() {
 }
 func (p *Pool) process(sess *Session) (err error) {
 
-	var m dnsmessage.Message
+	var (
+		res  Response
+		bnx  []byte
+		ok   bool
+		err2 error
+		m    dnsmessage.Message
+	)
 	if err = m.Unpack(sess.data); err != nil {
 		return
 	}
@@ -177,33 +183,43 @@ func (p *Pool) process(sess *Session) (err error) {
 
 		}(s)
 	}
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
 
-	wg.Wait()
-	close(ch)
+loop:
+	for {
+		select {
+		case res, ok = <-ch:
+			if !ok {
+				break loop
+			}
+			if res.err != nil {
+				err2 = res.err
+				continue
+			}
+			var m dnsmessage.Message
+			if err := m.Unpack(res.body); err != nil {
+				err2 = err
+				continue
+			}
+			if m.RCode == dnsmessage.RCodeSuccess {
+				sess.sock.WriteTo(res.body, sess.client)
+				return
+			} else {
+				bnx = res.body
+			}
 
-	var b Response
-	var bnx []byte
-	for b = range ch {
-		if b.err != nil {
-			continue
-		}
-		var m dnsmessage.Message
-		if err := m.Unpack(b.body); err != nil {
-			continue
-		}
-		if m.RCode == dnsmessage.RCodeSuccess {
-			sess.sock.WriteTo(b.body, sess.client)
-			return
-		} else {
-			bnx = b.body
 		}
 	}
+
 	if bnx != nil {
 		if _, err = sess.sock.WriteTo(bnx, sess.client); err != nil {
 			return
 		}
 	}
-	if b.err != nil {
+	if err2 != nil {
 		msg := dnsmessage.Message{Header: dnsmessage.Header{ID: id, Response: true, RCode: dnsmessage.RCodeServerFailure}}
 		buf, err2 := msg.Pack()
 		if err2 != nil {
