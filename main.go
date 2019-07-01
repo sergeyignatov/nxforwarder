@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 	"github.com/namsral/flag"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/dns/dnsmessage"
-	"log"
 	"net"
 	"runtime"
 	"strings"
@@ -41,7 +41,6 @@ func NewPool() *Pool {
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go p.worker()
 	}
-	go p.deleteOldKeys()
 	return p
 }
 
@@ -59,8 +58,8 @@ func (p *Pool) check(s string) (err error) {
 	defer p.lock.Unlock()
 	if v, ok := p.cache[s]; ok {
 
-		if time.Now().Sub(v) > time.Second {
-			p.cache[s] = time.Now()
+		if time.Now().Sub(v) > 0 {
+			p.cache[s] = time.Now().Add(time.Second)
 			return
 		}
 		err = fmt.Errorf("exists")
@@ -68,23 +67,17 @@ func (p *Pool) check(s string) (err error) {
 	}
 	p.cache[s] = time.Now()
 
+	go func(key string) {
+		<-time.After(2 * time.Second)
+		p.deleteKey(key)
+	}(s)
+
 	return
 }
 func (p *Pool) deleteKey(key string) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	delete(p.cache, key)
-}
-
-func (p *Pool) deleteOldKeys() {
-	for {
-		for k, v := range p.cache {
-			if time.Now().Sub(v) > 5*time.Second {
-				p.deleteKey(k)
-			}
-		}
-		time.Sleep(10 * time.Second)
-	}
 }
 
 func main() {
@@ -112,8 +105,11 @@ func main() {
 			dnsServers[i] = s
 		}
 	}
-
-	log.Printf("nxforwarder accepts dns requests on %s, forward to %s, timeout %s",
+	log.SetFormatter(&log.TextFormatter{
+		DisableColors: true,
+		FullTimestamp: true,
+	})
+	log.Infof("nxforwarder accepts dns requests on %s, forward to %s, timeout %s",
 		*listen,
 		strings.Join(dnsServers, ", "),
 		*timeout,
@@ -131,21 +127,34 @@ func main() {
 	}
 
 }
+
+func questions(m *dnsmessage.Message) string {
+	t := make([]string, len(m.Questions))
+	for i, v := range m.Questions {
+		t[i] = v.GoString()
+	}
+	return strings.Join(t, ", ")
+}
+
 func (p *Pool) process(sess *Session) (err error) {
 
 	var (
-		res  Response
-		bnx  []byte
-		ok   bool
-		err2 error
-		m    dnsmessage.Message
+		res Response
+		bnx []byte
+		ok  bool
+		m   dnsmessage.Message
 	)
 	if err = m.Unpack(sess.data); err != nil {
 		return
 	}
-	if err = p.check(m.Header.GoString()); err != nil {
+	key := fmt.Sprintf("%d - %s", m.ID, questions(&m))
+	if err = p.check(key); err != nil {
 		//loop protection
+		log.Warnf("loop detected, %s", key)
 		return
+	}
+	for _, x := range m.Questions {
+		x.GoString()
 	}
 
 	id := m.ID
@@ -196,12 +205,10 @@ loop:
 				break loop
 			}
 			if res.err != nil {
-				err2 = res.err
 				continue
 			}
 			var m dnsmessage.Message
 			if err := m.Unpack(res.body); err != nil {
-				err2 = err
 				continue
 			}
 			if m.RCode == dnsmessage.RCodeSuccess {
@@ -219,17 +226,14 @@ loop:
 			return
 		}
 	}
-	if err2 != nil {
-		msg := dnsmessage.Message{Header: dnsmessage.Header{ID: id, Response: true, RCode: dnsmessage.RCodeServerFailure}}
-		buf, err2 := msg.Pack()
-		if err2 != nil {
-			return
-		}
-		if _, err = sess.sock.WriteTo(buf, sess.client); err != nil {
-			return
-		}
+
+	msg := dnsmessage.Message{Header: dnsmessage.Header{ID: id, Response: true, RCode: dnsmessage.RCodeServerFailure}}
+	buf, err := msg.Pack()
+	if err != nil {
 		return
 	}
-
+	if _, err = sess.sock.WriteTo(buf, sess.client); err != nil {
+		return
+	}
 	return
 }
