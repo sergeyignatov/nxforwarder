@@ -153,9 +153,6 @@ func (p *Pool) process(sess *Session) (err error) {
 		log.Warnf("loop detected, %s", key)
 		return
 	}
-	for _, x := range m.Questions {
-		x.GoString()
-	}
 
 	id := m.ID
 	var wg sync.WaitGroup
